@@ -18,7 +18,6 @@ package com.google.gson.internal.bind;
 
 import com.google.gson.FieldNamingStrategy;
 import com.google.gson.Gson;
-import com.google.gson.JsonSyntaxException;
 import com.google.gson.TypeAdapter;
 import com.google.gson.TypeAdapterFactory;
 import com.google.gson.annotations.JsonAdapter;
@@ -30,7 +29,6 @@ import com.google.gson.internal.ObjectConstructor;
 import com.google.gson.internal.Primitives;
 import com.google.gson.reflect.TypeToken;
 import com.google.gson.stream.JsonReader;
-import com.google.gson.stream.JsonToken;
 import com.google.gson.stream.JsonWriter;
 import java.io.IOException;
 import java.lang.reflect.Field;
@@ -97,7 +95,7 @@ public final class ReflectiveTypeAdapterFactory implements TypeAdapterFactory {
     }
 
     ObjectConstructor<T> constructor = constructorConstructor.get(type);
-    return new Adapter<T>(constructor, getBoundFields(gson, type, raw));
+    return new ReflectiveTypeAdapter<T>(gson, constructor, getBoundFields(gson, type, raw), constructorConstructor);
   }
 
   private ReflectiveTypeAdapterFactory.BoundField createBoundField(
@@ -190,63 +188,5 @@ public final class ReflectiveTypeAdapterFactory implements TypeAdapterFactory {
     abstract boolean writeField(Object value) throws IOException, IllegalAccessException;
     abstract void write(JsonWriter writer, Object value) throws IOException, IllegalAccessException;
     abstract void read(JsonReader reader, Object value) throws IOException, IllegalAccessException;
-  }
-
-  public static final class Adapter<T> extends TypeAdapter<T> {
-    private final ObjectConstructor<T> constructor;
-    private final Map<String, BoundField> boundFields;
-
-    Adapter(ObjectConstructor<T> constructor, Map<String, BoundField> boundFields) {
-      this.constructor = constructor;
-      this.boundFields = boundFields;
-    }
-
-    @Override public T read(JsonReader in) throws IOException {
-      if (in.peek() == JsonToken.NULL) {
-        in.nextNull();
-        return null;
-      }
-
-      T instance = constructor.construct();
-
-      try {
-        in.beginObject();
-        while (in.hasNext()) {
-          String name = in.nextName();
-          BoundField field = boundFields.get(name);
-          if (field == null || !field.deserialized) {
-            in.skipValue();
-          } else {
-            field.read(in, instance);
-          }
-        }
-      } catch (IllegalStateException e) {
-        throw new JsonSyntaxException(e);
-      } catch (IllegalAccessException e) {
-        throw new AssertionError(e);
-      }
-      in.endObject();
-      return instance;
-    }
-
-    @Override public void write(JsonWriter out, T value) throws IOException {
-      if (value == null) {
-        out.nullValue();
-        return;
-      }
-
-      out.beginObject();
-      try {
-        for (BoundField boundField : boundFields.values()) {
-          if (boundField.writeField(value)) {
-            out.name(boundField.name);
-            boundField.write(out, value);
-          }
-        }
-      } catch (IllegalAccessException e) {
-        throw new AssertionError(e);
-      }
-      out.endObject();
-    }
   }
 }

@@ -23,6 +23,7 @@ package com.google.gson.internal;
  *
  * @author Inderjeet Singh
  * @author Joel Leitch
+ * @author Daniel Winterstein
  */
 public interface ObjectConstructor<T> {
 
@@ -30,4 +31,9 @@ public interface ObjectConstructor<T> {
    * Returns a new instance.
    */
   public T construct();
+  
+  /**
+   * @return What does this ObjectConstructor output?
+   */
+  public Class getType();
 }

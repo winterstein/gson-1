@@ -18,10 +18,18 @@ package com.google.gson.stream;
 
 import com.google.gson.internal.JsonReaderInternalAccess;
 import com.google.gson.internal.bind.JsonTreeReader;
+import com.google.gson.internal.bind.LateBinding;
+
 import java.io.Closeable;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.Reader;
+import java.lang.reflect.Field;
+import java.math.BigInteger;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
 
 /**
  * Reads a JSON (<a href="http://www.ietf.org/rfc/rfc7159.txt">RFC 7159</a>)
@@ -224,12 +232,18 @@ public class JsonReader implements Closeable {
   private static final int NUMBER_CHAR_EXP_DIGIT = 7;
 
   /** The input JSON. */
-  private final Reader in;
+	public final Reader in;
 
   /** True to accept non-spec compliant JSON */
   private boolean lenient = false;
 
   /**
+	 * Only used for JSOG loop-policy output
+	 */
+	private final HashMap<String,Object> ids = new HashMap();
+	
+	
+	/**
    * Use a manual buffer to easily read and unread upcoming characters, and
    * also so we can create strings without an intermediate StringBuilder.
    * We decode literals directly out of this buffer, so it must be at least as
@@ -347,7 +361,8 @@ public class JsonReader implements Closeable {
       pathIndices[stackSize - 1] = 0;
       peeked = PEEKED_NONE;
     } else {
-      throw new IllegalStateException("Expected BEGIN_ARRAY but was " + peek() + locationString());
+			throw new IllegalStateException("Expected BEGIN_ARRAY but was "
+					+ peek() + locationString());
     }
   }
 
@@ -365,7 +380,8 @@ public class JsonReader implements Closeable {
       pathIndices[stackSize - 1]++;
       peeked = PEEKED_NONE;
     } else {
-      throw new IllegalStateException("Expected END_ARRAY but was " + peek() + locationString());
+			throw new IllegalStateException("Expected END_ARRAY but was "
+					+ peek() + locationString());
     }
   }
 
@@ -382,7 +398,8 @@ public class JsonReader implements Closeable {
       push(JsonScope.EMPTY_OBJECT);
       peeked = PEEKED_NONE;
     } else {
-      throw new IllegalStateException("Expected BEGIN_OBJECT but was " + peek() + locationString());
+			throw new IllegalStateException("Expected BEGIN_OBJECT but was "
+					+ peek() + locationString());
     }
   }
 
@@ -401,7 +418,8 @@ public class JsonReader implements Closeable {
       pathIndices[stackSize - 1]++;
       peeked = PEEKED_NONE;
     } else {
-      throw new IllegalStateException("Expected END_OBJECT but was " + peek() + locationString());
+			throw new IllegalStateException("Expected END_OBJECT but was "
+					+ peek() + locationString());
     }
   }
 
@@ -458,6 +476,47 @@ public class JsonReader implements Closeable {
     }
   }
 
+
+  /**
+   * Make a copy of the reader, and mark the underlying reader so it can be reset.
+   * @return
+   * @throws IOException
+   * (Winterwell)
+   */
+	public JsonReader getShortTermCopy() throws IOException {
+      try {
+          JsonReader jr = new JsonReader(in);
+
+          // Mark it because we're going to reset pretty soon
+          jr.in.mark(1024);
+
+          jr.lenient = lenient;
+          jr.pos = pos;
+          jr.limit = limit;
+          jr.lineNumber = lineNumber;
+          jr.lineStart = lineStart;
+          jr.peeked = peeked;
+          jr.peekedLong = peekedLong;
+          jr.peekedNumberLength = peekedNumberLength;
+          jr.peekedString = peekedString;
+          jr.stack = Arrays.copyOf(stack, stack.length);
+          jr.stackSize = stackSize;
+          jr.pathNames = Arrays.copyOf(pathNames, pathNames.length);
+          jr.pathIndices = Arrays.copyOf(pathIndices, pathIndices.length);
+          // FIXME have we copied everything??
+          System.arraycopy(buffer, 0, jr.buffer, 0, buffer.length);
+          return jr;
+      } catch (IOException ex) {
+          // mark not supported
+          throw new IOException(ex.getMessage()+" "+in.getClass());
+      }
+	}
+
+	public void reset() throws IOException {
+		this.in.reset();
+	}
+
+  
   int doPeek() throws IOException {
     int peekStack = stack[stackSize - 1];
     if (peekStack == JsonScope.EMPTY_ARRAY) {
@@ -917,6 +976,61 @@ public class JsonReader implements Closeable {
     return result;
   }
 
+
+	/**
+	 * Returns the {@link com.google.gson.stream.JsonToken#NUMBER double} or
+	 * BigInteger value of the next token, consuming it. If the next token is a
+	 * string, this method will attempt to parse it as a double using
+	 * {@link Double#parseDouble(String)}.
+	 *
+	 * @throws IllegalStateException
+	 *             if the next token is not a literal value.
+	 * @throws NumberFormatException
+	 *             if the next literal value cannot be parsed as a double, or is
+	 *             non-finite.
+	 */
+	public Number nextNumber() throws IOException {
+		int p = peeked;
+		if (p == PEEKED_NONE) {
+			p = doPeek();
+		}
+
+		if (p == PEEKED_LONG) {
+			peeked = PEEKED_NONE;
+			return (double) peekedLong;
+		}
+
+		if (p == PEEKED_NUMBER) {
+			peekedString = new String(buffer, pos, peekedNumberLength);
+			pos += peekedNumberLength;
+		} else if (p == PEEKED_SINGLE_QUOTED || p == PEEKED_DOUBLE_QUOTED) {
+			peekedString = nextQuotedValue(p == PEEKED_SINGLE_QUOTED ? '\''
+					: '"');
+		} else if (p == PEEKED_UNQUOTED) {
+			peekedString = nextUnquotedValue();
+		} else if (p != PEEKED_BUFFERED) {
+			throw new IllegalStateException("Expected a double but was "
+					+ peek() + locationString());
+		}
+
+		peeked = PEEKED_BUFFERED;
+		double dresult = Double.parseDouble(peekedString); // don't catch this
+															// NumberFormatException.
+		Number result = dresult;
+		if (dresult > Long.MAX_VALUE && peekedString.indexOf('.') == -1
+				&& peekedString.indexOf('E') == -1) {
+			BigInteger bi = new BigInteger(peekedString);
+			result = bi;
+		}
+		if (!lenient && (Double.isNaN(dresult) || Double.isInfinite(dresult))) {
+			throw new MalformedJsonException(
+					"JSON forbids NaN and infinities: " + result + locationString());
+		}
+		peekedString = null;
+		peeked = PEEKED_NONE;
+		return result;
+	}
+  
   /**
    * Returns the {@link com.google.gson.stream.JsonToken#NUMBER long} value of the next token,
    * consuming it. If the next token is a string, this method will attempt to
@@ -1605,4 +1719,24 @@ public class JsonReader implements Closeable {
       }
     };
   }
+
+	public Object getIdValue(String ref) {
+		return ids.get(ref);
+	}
+	public void putIdValue(String id, Object value) {
+		ids.put(id, value);
+	}
+
+	public void addLateBinding(Object obj, Field f, int index, LateBinding lb) {
+		lateBindings.add(new Object[]{obj, f, index, lb});
+	}
+	
+	/**
+	 * [object, field, index, LB]
+	 */
+	List<Object[]> lateBindings = new ArrayList(0);
+
+	public List<Object[]> getLateBindings() {
+		return lateBindings;
+	}
 }

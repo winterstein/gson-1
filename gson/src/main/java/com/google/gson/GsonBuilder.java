@@ -76,6 +76,7 @@ import static com.google.gson.Gson.DEFAULT_SPECIALIZE_FLOAT_VALUES;
  * @author Jesse Wilson
  */
 public final class GsonBuilder {
+  public static final String DEFAULT_CLASS_PROPERTY = "@class";	
   private Excluder excluder = Excluder.DEFAULT;
   private LongSerializationPolicy longSerializationPolicy = LongSerializationPolicy.DEFAULT;
   private FieldNamingStrategy fieldNamingPolicy = FieldNamingPolicy.IDENTITY;
@@ -93,7 +94,10 @@ public final class GsonBuilder {
   private boolean escapeHtmlChars = DEFAULT_ESCAPE_HTML;
   private boolean prettyPrinting = DEFAULT_PRETTY_PRINT;
   private boolean generateNonExecutableJson = DEFAULT_JSON_NON_EXECUTABLE;
+  private String classProperty = DEFAULT_CLASS_PROPERTY;
+  private KLoopPolicy loopPolicy = KLoopPolicy.QUIET_NULL;  
   private boolean lenient = DEFAULT_LENIENT;
+private boolean stripComments;
 
   /**
    * Creates a GsonBuilder instance that can be used to build Gson with various configuration
@@ -569,7 +573,7 @@ public final class GsonBuilder {
     return new Gson(excluder, fieldNamingPolicy, instanceCreators,
         serializeNulls, complexMapKeySerialization,
         generateNonExecutableJson, escapeHtmlChars, prettyPrinting, lenient,
-        serializeSpecialFloatingPointValues, longSerializationPolicy, factories);
+        serializeSpecialFloatingPointValues, longSerializationPolicy, factories, classProperty);
   }
 
   private void addTypeAdaptersForDate(String datePattern, int dateStyle, int timeStyle,
@@ -587,4 +591,41 @@ public final class GsonBuilder {
     factories.add(TreeTypeAdapter.newFactory(TypeToken.get(Timestamp.class), dateTypeAdapter));
     factories.add(TreeTypeAdapter.newFactory(TypeToken.get(java.sql.Date.class), dateTypeAdapter));
   }
+
+  
+  //Added by SoDash
+  /**
+   * Set the property name used for recording the Java class behind the
+   * json. Adding this info to the json output allows us to 
+   * de-serialize sub-classes and interface implementations.
+   * 
+   * @param propertyName Can be null to switch-off "@class" output.
+   * Defaults to "@class"
+   */
+	public GsonBuilder setClassProperty(String propertyName) {
+		this.classProperty = propertyName;
+		return this;
+	}
+	
+
+	// Added by SoDash
+	/**
+	 * @param loopy The default is {@link KLoopPolicy#QUIET_NULL}. We assume that if you're using this fork of
+	 * the Gson library, then you want robust flexible serialisation. 
+	 */
+	public GsonBuilder setLoopPolicy(KLoopPolicy loopy) {
+		loopPolicy = loopy;
+		return this;
+	}
+
+	/**
+	 * Allow comments in json. Comments are not valid in json -- though they are allowed in javascript, and often useful.
+	 * @see JsonReader#setLenient(boolean)
+	 * @param stripComments
+	 * @return this
+	 */
+	public GsonBuilder setLenientReader(boolean stripComments) {
+		this.stripComments = stripComments;
+		return this;
+	}
 }

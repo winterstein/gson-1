@@ -49,12 +49,16 @@ import com.google.gson.internal.bind.ObjectTypeAdapter;
 import com.google.gson.internal.bind.ReflectiveTypeAdapterFactory;
 import com.google.gson.internal.bind.SqlDateTypeAdapter;
 import com.google.gson.internal.bind.TimeTypeAdapter;
+import com.google.gson.internal.bind.TreeTypeAdapter;
 import com.google.gson.internal.bind.TypeAdapters;
 import com.google.gson.reflect.TypeToken;
 import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonToken;
 import com.google.gson.stream.JsonWriter;
 import com.google.gson.stream.MalformedJsonException;
+
+// FIXME loopcheck code
+// FIXME registerTypeAdapter
 
 /**
  * This is the main class for using Gson. Gson is typically used by first constructing a
@@ -99,8 +103,46 @@ import com.google.gson.stream.MalformedJsonException;
  * @author Inderjeet Singh
  * @author Joel Leitch
  * @author Jesse Wilson
+ * @author Daniel Winterstein
  */
 public final class Gson {
+	
+	
+	/**
+	 * Allows for LATE setting of an adapter. 
+	 * @deprecated You should use {@link GsonBuilder#registerTypeAdapter(Type, Object)} instead. 
+	 * @param type
+	 * @param typeAdapter
+	 * @return this
+	 */
+	 public Gson registerTypeAdapter(Type type, Object typeAdapter) {
+//		    $Gson$Preconditions.checkArgument(typeAdapter instanceof JsonSerializer<?>
+//		        || typeAdapter instanceof JsonDeserializer<?>
+//		        || typeAdapter instanceof InstanceCreator<?>
+//		        || typeAdapter instanceof TypeAdapter<?>);
+//		    if (typeAdapter instanceof InstanceCreator<?>) {
+//		      instanceCreators.put(type, (InstanceCreator) typeAdapter);
+//		    }
+	    TypeToken<?> typeToken = TypeToken.get(type);
+	    if (typeAdapter instanceof JsonSerializer<?> || typeAdapter instanceof JsonDeserializer<?>) {		      
+	      factories.add(0, TreeTypeAdapter.newFactoryWithMatchRawType(typeToken, typeAdapter));
+	    }
+	    if (typeAdapter instanceof TypeAdapter<?>) {
+	      factories.add(0,TypeAdapters.newFactory(typeToken, (TypeAdapter)typeAdapter));
+	    }
+	    typeTokenCache.remove(typeToken);
+	    return this;
+	  }
+	 
+	/**
+	 * What version is this? And what version was it branched from?
+	 * The format is W(Winterwell version)_G(original Google version).
+	 * An S on the Google-version indicates "snapshot"
+	 * 
+	 * TODO update from https://github.com/google/gson v2.6.2
+	 */
+	public static String VERSION = "W1.3_G2.3.1S";
+	
   static final boolean DEFAULT_JSON_NON_EXECUTABLE = false;
   static final boolean DEFAULT_LENIENT = false;
   static final boolean DEFAULT_PRETTY_PRINT = false;
@@ -135,6 +177,37 @@ public final class Gson {
   private final boolean prettyPrinting;
   private final boolean lenient;
   private final JsonAdapterAnnotationTypeAdapterFactory jsonAdapterFactory;
+
+
+	// Added by Daniel
+	private final String classProperty;
+
+	private boolean lenientReader;
+
+	/**
+	 * How do we handle circular references? never null. HACK Should not be
+	 * static!!!
+	 * 
+	 * @since September 2014, added by Daniel
+	 */
+	private static KLoopPolicy loopPolicy;
+
+
+	/**
+	 * How do we handle circular references? never null.
+	 * @since September 2014, added by Daniel
+	 */
+	public static KLoopPolicy getLoopPolicy() {
+		return loopPolicy;
+	}
+
+	/**
+	 * @see GsonBuilder#setClassProperty(String)
+	 * @return null if this is off.
+	 */
+	public String getClassProperty() {
+		return classProperty;
+	}
 
   /**
    * Constructs a Gson object with default configuration. The default configuration has the
@@ -175,7 +248,7 @@ public final class Gson {
         Collections.<Type, InstanceCreator<?>>emptyMap(), DEFAULT_SERIALIZE_NULLS,
         DEFAULT_COMPLEX_MAP_KEYS, DEFAULT_JSON_NON_EXECUTABLE, DEFAULT_ESCAPE_HTML,
         DEFAULT_PRETTY_PRINT, DEFAULT_LENIENT, DEFAULT_SPECIALIZE_FLOAT_VALUES,
-        LongSerializationPolicy.DEFAULT, Collections.<TypeAdapterFactory>emptyList());
+        LongSerializationPolicy.DEFAULT, Collections.<TypeAdapterFactory>emptyList(), GsonBuilder.DEFAULT_CLASS_PROPERTY);
   }
 
   Gson(final Excluder excluder, final FieldNamingStrategy fieldNamingStrategy,
@@ -183,7 +256,7 @@ public final class Gson {
       boolean complexMapKeySerialization, boolean generateNonExecutableGson, boolean htmlSafe,
       boolean prettyPrinting, boolean lenient, boolean serializeSpecialFloatingPointValues,
       LongSerializationPolicy longSerializationPolicy,
-      List<TypeAdapterFactory> typeAdapterFactories) {
+      List<TypeAdapterFactory> typeAdapterFactories, String classProperty) {
     this.constructorConstructor = new ConstructorConstructor(instanceCreators);
     this.excluder = excluder;
     this.fieldNamingStrategy = fieldNamingStrategy;
@@ -192,6 +265,7 @@ public final class Gson {
     this.htmlSafe = htmlSafe;
     this.prettyPrinting = prettyPrinting;
     this.lenient = lenient;
+    this.classProperty = classProperty;
 
     List<TypeAdapterFactory> factories = new ArrayList<TypeAdapterFactory>();
 
@@ -986,4 +1060,79 @@ public final class Gson {
         .append("}")
         .toString();
   }
+
+
+	/**
+	 * Strip out the _class properties added by this version of Gson.
+	 * 
+	 * @param json
+	 * @return json without the classProperty bits
+	 */
+	public String removeClassProperty(String json) {
+		if (classProperty == null)
+			return json;
+		String json2 = json.replaceAll("[\"']" + classProperty
+				+ "[\"']:[\"'][^\"']*[\"'],?", "");
+		return json2;
+	}
+
+	/**
+	 * Use "@class" (see {@link #getClassProperty()}) if set to determine
+	 * what class to make.
+	 * @param json
+	 * @return de-serialised POJO
+	 * @since October 2014, added by Daniel
+	 */
+	public <T> T fromJson(String json) {
+		if (classProperty==null) {
+			throw new IllegalStateException("This method works via @class, which is switched off. Please use fromJson(String,Class)");
+		}
+		return (T) fromJson(json, Object.class);
+	}
+	
+	/**
+	 * Use "@class" (see {@link #getClassProperty()}) if set to determine
+	 * what class to make.
+	 * @param json
+	 * @return de-serialised POJO
+	 * @since October 2014, added by Daniel
+	 */
+	public <T> T fromJson(Reader json) {
+		if (classProperty==null) {
+			throw new IllegalStateException("This method works via @class, which is switched off. Please use fromJson(String,Class)");
+		}
+		return (T) fromJson(json, Object.class);
+	}
+
+	public <X> X convert(Map mapFromJson, Class<X> klass) {
+		// inefficient, but should work
+		String json = toJson(mapFromJson);
+		X obj = fromJson(json, klass);
+		return obj;
+	}
+	
+
+	private static Gson SAFE_GSON = new GsonBuilder()
+				.setLenientReader(true)
+				.serializeSpecialFloatingPointValues()
+				.setDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'")
+				.setClassProperty(null).setLoopPolicy(KLoopPolicy.QUIET_NULL)
+				.create();
+	
+	/**
+	 * This is the GSON used by {@link #toJSON(Object)} and {@link #fromJSON(String)}.
+	 * @param gson
+	 */
+	public static void setDefaultGSON(Gson gson) {
+		SAFE_GSON = gson;
+	}
+	/**
+	 * Convenience for a safe robust default just-read-me-some-json convertor.
+	 * @param json
+	 * @return object
+	 */
+	// Note: named with capitals to avoid conflict with toJson()
+	public static Map fromJSON(String json) {
+		return SAFE_GSON.fromJson(json, Map.class);
+	}
 }

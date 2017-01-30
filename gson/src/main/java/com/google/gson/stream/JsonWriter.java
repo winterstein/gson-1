@@ -20,6 +20,11 @@ import java.io.Closeable;
 import java.io.Flushable;
 import java.io.IOException;
 import java.io.Writer;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.HashMap;
+
+import com.google.gson.KLoopPolicy;
 
 import static com.google.gson.stream.JsonScope.DANGLING_NAME;
 import static com.google.gson.stream.JsonScope.EMPTY_ARRAY;
@@ -656,4 +661,66 @@ public class JsonWriter implements Closeable, Flushable {
       throw new IllegalStateException("Nesting problem.");
     }
   }
+
+	final Deque loopy = new ArrayDeque();
+
+	/**
+	 * Calls to this must be paired with a call to {@link #endLoopCheck(Object)}
+	 * 
+	 * @param policy
+	 * @param source
+	 * @return ok-flag. true=all-fine, false if a loop is detected.
+	 */
+	public boolean beginLoopCheck(KLoopPolicy policy, Object source) {
+		if (policy == KLoopPolicy.NO_CHECKS)
+			return true;
+		if (loopy.contains(source)) {
+			switch (policy) {
+			case EXCEPTION:
+				throw new IllegalArgumentException(
+						"Circular references not allowed.");
+			case QUIET_NULL:
+				return false;
+			}
+		}
+		loopy.push(source);		
+		return true;
+	}
+	
+	/**
+	 * @param object
+	 * @return JSOG "@ref" or null
+	 */
+	public String getRef(Object object) {
+		String id = ids.get(object);
+		return id;
+	}
+	
+	
+	/**
+	 * Only used for JSOG loop-policy output
+	 */
+	private final HashMap<Object,String> ids = new HashMap();
+	
+	/**
+	 * @param object
+	 * @return A freshly created JSOG "@id"
+	 * 
+	 * @see #getRef(Object)
+	 * @see KLoopPolicy#JSOG
+	 */
+	public String getNewId(Object object) {
+		String id = String.valueOf(ids.size()+1);
+		String old = ids.put(object, id);
+		assert old == null;
+		return id;
+	}
+	
+
+	public void endLoopCheck(Object source) {
+		// guard, because loop checking might be off in which case this could be
+		// empty
+		if (loopy.peek() == source)
+			loopy.pop();
+	}
 }
